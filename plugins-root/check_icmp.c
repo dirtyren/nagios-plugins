@@ -119,7 +119,9 @@ typedef struct rta_host {
 	char *name;                  /* arg used for adding this host */
 	char *msg;                   /* icmp error message, if any */
 	struct sockaddr_in saddr_in; /* the address of this host */
+	struct sockaddr_in6 saddr_in6; /* the address of this host in IPv6 */
 	struct in_addr error_addr;   /* stores address of error replies */
+	struct in6_addr error_addr6;   /* stores address of error replies in IPv6 */
 	unsigned long long time_waited; /* total time waited, in usecs */
 	unsigned int icmp_sent, icmp_recv, icmp_lost; /* counters */
 	unsigned char icmp_type, icmp_code; /* type and code from errors */
@@ -252,6 +254,7 @@ int	jitter_mode=0;
 int	score_mode=0;
 int	mos_mode=0;
 int	order_mode=0;
+int	ipv6_mode=0;
 
 /** code start **/
 static void
@@ -421,30 +424,6 @@ main(int argc, char **argv)
 	/* print a helpful error message if geteuid != 0 */
 	np_warn_if_not_root();
 
-	/* we only need to be setsuid when we get the sockets, so do
-	 * that before pointer magic (esp. on network data) */
-	icmp_sockerrno = udp_sockerrno = tcp_sockerrno = sockets = 0;
-
-	if((icmp_sock = socket(PF_INET, SOCK_RAW, IPPROTO_ICMP)) != -1)
-		sockets |= HAVE_ICMP;
-	else icmp_sockerrno = errno;
-
-	/* if((udp_sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) != -1) */
-	/* 	sockets |= HAVE_UDP; */
-	/* else udp_sockerrno = errno; */
-
-	/* if((tcp_sock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) != -1) */
-	/* 	sockets |= HAVE_TCP; */
-	/* else tcp_sockerrno = errno; */
-
-	/* now drop privileges (no effect if not setsuid or geteuid() == 0) */
-	setuid(getuid());
-
-#ifdef SO_TIMESTAMP
-	if(setsockopt(icmp_sock, SOL_SOCKET, SO_TIMESTAMP, &on, sizeof(on)))
-	  if(debug) printf("Warning: no SO_TIMESTAMP support\n");
-#endif // SO_TIMESTAMP
-
 	/* POSIXLY_CORRECT might break things, so unset it (the portable way) */
 	environ = NULL;
 
@@ -513,7 +492,7 @@ main(int argc, char **argv)
 
 	/* parse the arguments */
 	for(i = 1; i < argc; i++) {
-		while((arg = getopt(argc, argv, "vhVw:c:n:p:t:H:s:i:b:I:l:m:P:R:J:S:M:O")) != EOF) {
+		while((arg = getopt(argc, argv, "vhVw:c:n:p:t:H:s:i:b:I:l:m:P:R:J:S:M:O:6")) != EOF) {
 			long size;
 			switch(arg) {
 			case 'v':
@@ -529,6 +508,9 @@ main(int argc, char **argv)
 					usage_va("ICMP data length must be between: %d and %d",
 					         sizeof(struct icmp) + sizeof(struct icmp_ping_data),
 					         MAX_PING_DATA - 1);
+				break;
+			case '6':
+				ipv6_mode = 1;
 				break;
 			case 'i':
 				pkt_interval = get_timevar(optarg);
@@ -611,6 +593,32 @@ main(int argc, char **argv)
 		crash("No hosts to check");
 		exit(3);
 	}
+
+	/* we only need to be setsuid when we get the sockets, so do
+	 * that before pointer magic (esp. on network data) */
+	icmp_sockerrno = udp_sockerrno = tcp_sockerrno = sockets = 0;
+
+	if (ipv6_mode == 1) {
+		if((icmp_sock = socket(AF_INET6, SOCK_RAW, IPPROTO_IPV6)) != -1) {
+			sockets |= HAVE_ICMP;
+		}
+		else {
+			icmp_sockerrno = errno;
+		}
+	}
+	else {
+		if((icmp_sock = socket(PF_INET, SOCK_RAW, IPPROTO_ICMP)) != -1)
+			sockets |= HAVE_ICMP;
+		else icmp_sockerrno = errno;
+	}
+
+	/* now drop privileges (no effect if not setsuid or geteuid() == 0) */
+	setuid(getuid());
+
+#ifdef SO_TIMESTAMP
+	if(setsockopt(icmp_sock, SOL_SOCKET, SO_TIMESTAMP, &on, sizeof(on)))
+	  if(debug) printf("Warning: no SO_TIMESTAMP support\n");
+#endif // SO_TIMESTAMP
 
 	if(!sockets) {
 		if(icmp_sock == -1) {
